@@ -1,10 +1,6 @@
 #!/bin/bash
 source activate ML
 
-# Default destination/data directory and overwrite flag
-# default_destination_dir="simulations"
-default_overwrite=0
-
 # Function to simulate data using Python script
 simulate_data() {
   # Check if the destination directory exists; create it if not
@@ -14,13 +10,12 @@ simulate_data() {
   fi
 
   # Parse inputs
-  local is_server=$1
-  local overwrite=$2
-  local sample=$3
-  local overlap=$4
-  local noise=$5
-  local missingness=$6
-  local destination_dir=${7:-$default_destination_dir}  # Use default if not provided
+  local overwrite=$1
+  local sample=$2
+  local overlap=$3
+  local noise=$4
+  local missingness=$5
+  local destination_dir=${6:-$default_destination_dir}  # Use default if not provided
 
   # Create a unique filename for each run
   local filename="${filename_base}_samples${sample}_overlap${overlap}_noise${noise}_${missingness}"
@@ -35,7 +30,7 @@ simulate_data() {
   fi
 
   # Run the Python script with the current parameter combination
-  python "$code_dir/simulate_00_agedep.py" \
+  python "$code_dir/simulate_00_generate_dataset.py" \
     "$filename" "$destination_dir" \
     --num_samples "$sample" \
     --matrix_type "$matrix_type" \
@@ -44,53 +39,7 @@ simulate_data() {
     --vector_length "$vector_length" \
     --noise "$noise" \
     --seed "$seed" \
-    --missingness "$missingness" \
-    --is_server "$is_server"
-
-  # Print status message
-  echo "Generated samples with num_samples=$sample, overlap=$overlap, noise=$noise, missingness=$missingness"
-}
-
-simulate_diverse_data() {
-  # Check if the destination directory exists; create it if not
-  if [ ! -d "$destination_dir" ]; then
-    mkdir -p "$destination_dir"
-    echo "Directory created: $destination_dir"
-  fi
-
-  # Parse inputs
-  local is_server=$1
-  local overwrite=$2
-  local sample=$3
-  local overlap=$4
-  local noise=$5
-  local missingness=$6
-  local destination_dir=${7:-$default_destination_dir}  # Use default if not provided
-
-  # Create a unique filename for each run
-  local filename="${filename_base}_samples${sample}_overlap${overlap}_noise${noise}_${missingness}"
-
-  # Full path to the output file
-  local output_file="${destination_dir}/${filename}.csv"
-
-  # Check if file exists and overwrite is set to 0
-  if [ -f "$output_file" ] && [ "$overwrite" -eq 0 ]; then
-    echo "File $output_file already exists. Skipping generation."
-    return
-  fi
-
-  # Run the Python script with the current parameter combination
-  python "$code_dir/simulate_00_agedep_cohorts.py" \
-    "$filename" "$destination_dir" \
-    --num_samples "$sample" \
-    --matrix_type "$matrix_type" \
-    --overlap "$overlap" \
-    --num_datasets "$num_datasets" \
-    --vector_length "$vector_length" \
-    --noise "$noise" \
-    --seed "$seed" \
-    --missingness "$missingness" \
-    --is_server "$is_server"
+    --missingness "$missingness"
 
   # Print status message
   echo "Generated samples with num_samples=$sample, overlap=$overlap, noise=$noise, missingness=$missingness"
@@ -119,32 +68,20 @@ run_simulations() {
     for overlap in "${overlaps[@]}"; do
       for noise in "${noises[@]}"; do
         for missingness in "${missingness_types[@]}"; do
-          simulate_data "$run_at_server" "$overwrite" "$sample" "$overlap" "$noise" "$missingness" "$destination_dir"
+          simulate_data "$overwrite" "$sample" "$overlap" "$noise" "$missingness" "$destination_dir"
         done
       done
     done
   done
 }
 
-run_simulations_cohorts() {
-  local destination_dir=${1:-$default_destination_dir}  # Use default if not provided
-  
-  # Define the types of missingness
-  local missingness_types=("noise" "blocks" "dependence" "noise-blocks" "noise-dependence" "noise-blocks-dependence")
-
-  for sample in "${samples[@]}"; do
-    for overlap in "${overlaps[@]}"; do
-      for noise in "${noises[@]}"; do
-        for missingness in "${missingness_types[@]}"; do
-          simulate_diverse_data "$run_at_server" "$overwrite" "$sample" "$overlap" "$noise" "$missingness" "$destination_dir"
-        done
-      done
-    done
-  done
-}
 
 # Function to run the AutoComplete process on normalized data
-run_AutoComplete() {  
+Autocomplete_run() {  
+  local destination_dir="$1"
+  local run_at_server="$2"
+  local overwrite="$3"
+  local AutoComplete_path="$4"
   local lr=0.1
   local batch_size=25
   local epochs=1000
@@ -154,15 +91,17 @@ run_AutoComplete() {
   local simulate_missing=0.01
   local depth=1
 
-  cd $1/normalized
+  cd $destination_dir/normalized
 
   # Find stratified normalized files and run the AutoComplete process
   find . -maxdepth 1 -type f -name "*_norm.csv" | while read -r ifile 
   do
     Data_to_analyze="$(realpath "$ifile")"
     bash "$code_dir/simulate_02_AutoComplete.sh" \
-      "$2" \
+      "$run_at_server" \
       "$Data_to_analyze" \
+      "$AutoComplete_path" \
+      "$destination_dir/AC_results" \
       "$lr" \
       "$batch_size" \
       "$epochs" \
@@ -171,51 +110,24 @@ run_AutoComplete() {
       "$copymask_amount" \
       "$simulate_missing" \
       "$depth" \
-      "$3"
+      "$overwrite"
   done
 }
 
-evaluate_AutoComplete() {    
-  # Define the code directory path
-  code_dir="/project/3022000.05/precognition/scripts/Precognition_scripts"
-  
-  # Check if the entire function should be submitted as a single cluster job
-#   if [ "$2" == "1" ]; then
-#     echo "Submitting the entire function to the cluster as one job."
+Autocomplete_evaluate() {    
+  # Process each seed directory within AC_results
+  local destination_dir="$1"
+  local run_at_server="$2"
+  local overwrite="$3"
 
-#     # Submit to the cluster with Slurm, changing $2 to "2" to prevent resubmission
-#     sbatch <<EOF
-# #!/bin/bash
-# #SBATCH --job-name=AutoCompleteEvaluation
-# #SBATCH --output=${1}/AC_results/cluster_job_%j.out
-# #SBATCH --ntasks=1
-# #SBATCH --cpus-per-task=1   
-# #SBATCH --mem=5G
-# #SBATCH --time=2:00:00
-
-# module load python
-
-# source activate ML
-# $(declare -f evaluate_AutoComplete)
-# evaluate_AutoComplete "$1" "2" "$3" "$4" # Call the function with modified "$2"
-# EOF
-#     return  # Exit after submission
-#   fi
-
-#   # Skip re-submission if running in the cluster (i.e., $2 is now "2")
-#   if [ "$2" == "2" ]; then
-#     echo "Already running on the cluster. Skipping re-submission."
-#   fi
-
-# Process each seed directory within AC_results
-  SIM_PATH="${1}/AC_results" 
-  if [ ! -d $SIM_PATH/concatenated ]; then 
-      python utils_concat_csv.py --parent_dir $SIM_PATH --method AC
+  Results="${destination_dir}/AC_results" 
+  if [ ! -d $destination_dir/concatenated ]; then 
+      python utils_concat_csv.py --parent_dir $Results --method AC
   fi
-  cd "$SIM_PATH" || { echo "Failed to change directory to $SIM_PATH"; exit 1; }
+  cd "$Results" || { echo "Failed to change directory to $Results"; exit 1; }
 
   # Find stratified normalized files and run the evaluation process
-  find "$1" -maxdepth 1 -type f -name "*_complete.csv" | while read -r ifile; do
+  find "$destination_dir" -maxdepth 1 -type f -name "*_complete.csv" | while read -r ifile; do
     # Extract COMPLETE_DATA and prepare BLOCKS_DATA and CORENAME
     COMPLETE_DATA="$(realpath "$ifile")"
     BLOCKS_DATA="${COMPLETE_DATA/_complete.csv/_blocks.csv}"
@@ -224,32 +136,32 @@ evaluate_AutoComplete() {
     CORENAME="${FILENAME/_complete.csv/}"
 
     # Define paths for imputed files within the current seed directory, using the extracted seed
-    GLOBAL_NORM_IMPUTED="${SIM_PATH}/concatenated/${CORENAME}_global_norm_imputed_concatenated.csv"
-    STRAT_NORM_IMPUTED="${SIM_PATH}/concatenated/${CORENAME}_strat_norm_imputed_concatenated.csv"
-    FINAL_FILE="${SIM_PATH}/quality/${CORENAME}_quality.csv"
+    GLOBAL_NORM_IMPUTED="${Results}/concatenated/${CORENAME}_global_norm_imputed_concatenated.csv"
+    STRAT_NORM_IMPUTED="${Results}/concatenated/${CORENAME}_strat_norm_imputed_concatenated.csv"
+    FINAL_FILE="${Results}/quality/${CORENAME}_quality.csv"
 
     # Check if FINAL_FILE exists and overwrite is set to 0
-    if [ "$3" == "0" ] && [ -f "$FINAL_FILE" ]; then
+    if [ "$overwrite" == "0" ] && [ -f "$FINAL_FILE" ]; then
       echo "File ${FINAL_FILE} already exists and overwrite is set to 0. Skipping evaluation for seed $seed."
       continue
     fi
 
     # Run Python script for AutoComplete evaluation
-    python "${4}/simulate_03_eval.py" \
+    python "$code_dir/simulate_03_eval.py" \
       --algorithm AutoComplete \
       --complete_data "$COMPLETE_DATA" \
       --blocks_data "$BLOCKS_DATA" \
       --global_norm_imputed "$GLOBAL_NORM_IMPUTED" \
       --strat_norm_imputed "$STRAT_NORM_IMPUTED" \
-      --output_dir "$SIM_PATH"
+      --output_dir "$Results"
   done
 }
 
-run_ET() {  
+ET_run() {  
   cd "$1" || { echo "Failed to change directory to $1"; exit 1; }
 
   # Define the base directory for target folders based on the server flag
-    Results=$SIM_PATH/"ET_results"
+    Results=$1/"ET_results"
   
   # Ensure the Results directory exists
   mkdir -p "$Results"
@@ -298,10 +210,14 @@ EOF
 }
 
 
-evaluate_ET() {    
+ET_evaluate() {    
 #  
+  local destination_dir="$1"
+  local run_at_server="$2"
+  local overwrite="$3"
+
     # Set the current seed directory as SIM_PATH
-    SIM_PATH="${1}/ET_results"
+    SIM_PATH="${destination_dir}/ET_results"
 
     # Check if the concatenated directory exists and run concatenate_csvs if necessary
     if [ ! -d "$SIM_PATH/concatenated" ]; then 
@@ -343,20 +259,27 @@ evaluate_ET() {
 }
 
 
-run_MICE_standard() {  
-  cd "$1" || { echo "Failed to change directory to $1"; exit 1; }
+MICE_standard_run() {  
+  local destination_dir="$1"
+  local run_at_server="$2"
+  local overwrite="$3"
+  local MICE_package="$4"
+
+  cd "$destination_dir" || { echo "Failed to change directory to $1"; exit 1; }
 
   # Define the base directory for target folders based on the server flag
-  Results=$SIM_PATH/"ET_results"
+  Results=$destination_dir/"MICE_standard_results"
   
-  # Ensure the Results directory exists
-  mkdir -p "$Results"
+  if [ ! -d "$Results" ]; then
+    mkdir -p "$Results"
+    echo "Directory created: $Results"
+  fi
 
   # Find stratified normalized files and run the AutoComplete process
   find . -maxdepth 1 -type f -name "*_complete.csv" | while read -r ifile; do
     Data_to_analyze="$(realpath "$ifile")"
     Data_missing="${Data_to_analyze/_complete.csv/_blocks.csv}"
-    Data_results="${TARGET_DIR}/$(basename "${Data_to_analyze/_complete.csv/_imputed.csv}")"
+    Data_results="${Results}/$(basename "${Data_to_analyze/_complete.csv/_imputed.csv}")"
 
     # Check if Data_results exists in TARGET_DIR and OVERWRITE is set to 0
     if [ "$3" == "0" ] && [ -e "$Data_results" ]; then
@@ -382,7 +305,7 @@ module unload R/4.3.3
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
 export LC_CTYPE=en_US.UTF-8
-export R_LIBS_USER=/home/preclineu/barbuc/.conda/envs/R_env
+export R_LIBS_USER="${MICE_package}"
 
 Rscript "$code_dir/simulate_02_MICE.R" "$Data_missing" "$Results"
 EOF
@@ -393,14 +316,21 @@ EOF
     done
 }
 
-run_MICE_context() {  
-  cd "$1" || { echo "Failed to change directory to $1"; exit 1; }
+MICE_context_run() {  
+  local destination_dir="$1"
+  local run_at_server="$2"
+  local overwrite="$3"
+  local MICE_package="$4"
+
+  cd "$destination_dir" || { echo "Failed to change directory to $1"; exit 1; }
 
   # Define the base directory for target folders based on the server flag
-  Results=$SIM_PATH/"ET_results"
+  Results=$destination_dir/"MICE_context_results"
   
-  # Ensure the Results directory exists
-  mkdir -p "$Results"
+  if [ ! -d "$Results" ]; then
+    mkdir -p "$Results"
+    echo "Directory created: $Results"
+  fi
 
   # Find stratified normalized files and run the AutoComplete process
   find . -maxdepth 1 -type f -name "*_complete.csv" | while read -r ifile; do
@@ -409,13 +339,13 @@ run_MICE_context() {
     Data_results="${Results}/$(basename "${Data_to_analyze/_complete.csv/_imputed.parquet}")"
 
     # Check if Data_results exists in TARGET_DIR and OVERWRITE is set to 0
-    if [ "$3" == "0" ] && [ -e "$Data_results" ]; then
+    if [ "$overwrite" == "0" ] && [ -e "$Data_results" ]; then
       echo "Data_results $Data_results already exists and OVERWRITE is set to 0. Skipping..."
       continue  # Exit the current iteration of the for-loop for this seed
     fi
 
     # Check if running on server or locally, then initiate Python script
-    if [ "$2" == "1" ]; then
+    if [ "$run_at_server" == "1" ]; then
       sbatch <<EOF
 #!/bin/bash
 #SBATCH --job-name=MICE_context
@@ -432,7 +362,7 @@ module unload R/4.3.3
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
 export LC_CTYPE=en_US.UTF-8
-export R_LIBS_USER=/home/preclineu/barbuc/.conda/envs/R_env
+export R_LIBS_USER="${MICE_package}"
 
 Rscript "$code_dir/simulate_02_MICE_context.R" "$Data_missing" "$Results"
 EOF
@@ -443,58 +373,7 @@ EOF
     done
 }
 
-run_MICE_hnorm() {  
-  cd "$1" || { echo "Failed to change directory to $1"; exit 1; }
-
-  # Define the base directory for target folders based on the server flag
-  Results=$SIM_PATH/"ET_results"
-  
-  # Ensure the Results directory exists
-  mkdir -p "$Results"
-
-  # Find stratified normalized files and run the AutoComplete process
-  find . -maxdepth 1 -type f -name "*_complete.csv" | while read -r ifile; do
-    Data_to_analyze="$(realpath "$ifile")"
-    Data_missing="${Data_to_analyze/_complete.csv/_blocks.csv}"
-    Data_results="${Results}/$(basename "${Data_to_analyze/_complete.csv/_imputed.parquet}")"
-
-    # Check if Data_results exists in TARGET_DIR and OVERWRITE is set to 0
-    if [ "$3" == "0" ] && [ -e "$Data_results" ]; then
-      echo "Data_results $Data_results already exists and OVERWRITE is set to 0. Skipping..."
-      continue  # Exit the current iteration of the for-loop for this seed
-    fi
-
-    # Check if running on server or locally, then initiate Python script
-    if [ "$2" == "1" ]; then
-      sbatch <<EOF
-#!/bin/bash
-#SBATCH --job-name=MICE_hnorm
-#SBATCH --output="${Results}/impute_seed.out"
-#SBATCH --error="${Results}/impute_seed.err"
-#SBATCH --time=01:00:00  
-#SBATCH --cpus-per-task=1
-#SBATCH --ntasks=1
-#SBATCH --mem=8G
-
-source activate R_env
-module unload R/4.3.3
-
-export LANG=en_US.UTF-8
-export LC_ALL=en_US.UTF-8
-export LC_CTYPE=en_US.UTF-8
-export R_LIBS_USER=/home/preclineu/barbuc/.conda/envs/R_env
-
-Rscript "$code_dir/simulate_02_hnorm_MICE.R" "$Data_missing" "$Results"
-EOF
-      else
-        Rscript "$code_dir/simulate_02_hnorm_MICE.R" "$Data_missing" "$Results"
-      fi
-
-    done
-}
-
-
-evaluate_MICE() {
+MICE_evaluate() {
   # Check if the entire function should be submitted as a single cluster job
   # Process files locally if not submitting to the cluster
   find "$1" -maxdepth 1 -type d -name "MICE*" | while read -r mice_dir; do
@@ -536,14 +415,21 @@ evaluate_MICE() {
     done
 }
 
-run_average() {  
-  cd "$1" || { echo "Failed to change directory to $1"; exit 1; }
+Average_run() {  
+  local destination_dir="$1"
+  local run_at_server="$2"
+  local overwrite="$3"
+
+  cd "$destination_dir" || { echo "Failed to change directory to $1"; exit 1; }
 
   # Define the base directory for target folders based on the server flag
-  Results=$SIM_PATH/"ET_results"
+  Results=$destination_dir/"Average_results"
   
-  # Ensure the Results directory exists
-  mkdir -p "$Results"
+  # Check if the destination directory exists; create it if not
+  if [ ! -d "$Results" ]; then
+    mkdir -p "$Results"
+    echo "Directory created: $Results"
+  fi
 
   # Although average will always be the same, we'll run it multiple times as it simplifies the evaluations and runs quickly
   for seed in {1..10}; do
@@ -588,7 +474,7 @@ EOF
   done
 }
 
-evaluate_average() {    
+Average_evaluate() {    
 #  
     # Set the current seed directory as SIM_PATH
     SIM_PATH="${1}/Average_results"
@@ -633,30 +519,32 @@ evaluate_average() {
 }
 
 
-
-
-
+# Display help message
 # Display help message
 usage() {
-  echo "Usage: $0 {all|simulate|normalize|autocomplete|evaluate|run_ET} [destination_dir] [overwrite] [run_at_server]"
+  echo "Usage: $0 {simulate|normalize|autocomplete_run|autocomplete_evaluate|ET_run|ET_evaluate|MICE_standard_run|MICE_context_run|MICE_evaluate|Average_run|Average_evaluate} [destination_dir] [overwrite] [run_at_server] [AutoComplete_path]"
+  echo ""
   echo "Options:"
-  echo "  simulate                Run only the simulations"
-  echo "  normalize               Run only the normalization"
-  echo "  autocomplete            Run AutoComplete analysis on normalized data"
-  echo "  autocomplete_evaluate   Evaluate AutoComplete results"
+  echo "  Simulate                Run simulations for generating synthetic datasets"
+  echo "  Normalize               Normalize simulated data for imputation"
+  echo "  Autocomplete_run        Run AutoComplete imputation method"
+  echo "  Autocomplete_evaluate   Evaluate AutoComplete results"
   echo "  ET_run                  Run Extra Trees imputation"
-  echo "  ET_evaluate             Evaluate Extra Trees imputation"
-  echo "  MICE_standard_run       Run MICE imputation"
-  echo "  MICE_hnorm_run          Run MICE imputation"
-  echo "  MICE_context_run        Run MICE imputation"
-  echo "  MICE_evaluate           Evaluate MICE imputation"
-  echo "  Average_run             Run average imputation"
-  echo "  Average_evaluate        Evaluate average imputation"
+  echo "  ET_evaluate             Evaluate Extra Trees imputation results"
+  echo "  MICE_standard_run       Run standard MICE (Multiple Imputation by Chained Equations)"
+  echo "  MICE_context_run        Run contextual variant of MICE"
+  echo "  MICE_evaluate           Evaluate MICE imputation results"
+  echo "  Average_run             Run mean (average) value imputation"
+  echo "  Average_evaluate        Evaluate average imputation results"
+  echo ""
   echo "Arguments:"
-  echo "  destination_dir (optional)  Directory to save generated and normalized files"
-  echo "  overwrite       (optional)  Set to 1 to overwrite existing normalized files"
-  echo "  run_at_server   (optional)  Set to 1 to change paths for server execution"
+  echo "  destination_dir   (optional)   Directory to store generated/normalized data (default: 'simulations')"
+  echo "  overwrite         (optional)   Set to 1 to overwrite existing files (default: 0)"
+  echo "  run_at_server     (optional)   Set to 1 to adjust paths for server environment (default: 0)"
+  echo "  package_path      (optional)   Path to AutoComplete/MICE codebase (default: current script directory)"
+  echo ""
 }
+
 
 # Main script logic
 if [ $# -eq 0 ]; then
@@ -664,16 +552,10 @@ if [ $# -eq 0 ]; then
   exit 1
 fi
 
-# Parse arguments for optional parameters
-destination_dir=${2:-$default_destination_dir}  # If not provided, use default
-overwrite=${3:-$default_overwrite}              # If not provided, use default
-run_at_server=${4:-0}                           # Default to 0 if not provided
-
-# Define arrays for the varying parameters
-samples=(50 500 5000)
-overlaps=(4 10 20)
-noises=(0.1 0.3 0.5 0.7)
-
+# Default destination/data directory and overwrite flag
+default_destination_dir="simulations"
+default_overwrite=0
+default_run_at_server=0
 # Set other fixed parameters
 filename_base="simulation_"
 code_dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -682,46 +564,51 @@ num_datasets=2
 vector_length=8
 seed=42
 
+# Parse arguments for optional parameters
+destination_dir=${2:-$default_destination_dir}  # If not provided, use default
+overwrite=${3:-$default_overwrite}              # If not provided, use default
+run_at_server=${4:-$default_run_at_server}      # If not provided, use default
+package_path=${5:-$code_dir}
+
+# Define arrays for the varying parameters
+samples=(50 500 5000)
+overlaps=(4 10 20)
+noises=(0.1 0.3 0.5 0.7)
+
 # Execute based on the first argument
 case "$1" in
-  simulate)
+  Simulate)
     run_simulations "$destination_dir"
     ;;
-  simulate_site_effects)
-    run_simulations_cohorts "$destination_dir"
-    ;;
-  normalize)
+  Normalize)
     normalize_data "$destination_dir" "$overwrite"
     ;;
-  autocomplete)
-    run_AutoComplete "$destination_dir" "$run_at_server" "$overwrite"
+  Autocomplete_run)
+    Autocomplete_run "$destination_dir" "$run_at_server" "$overwrite" "$package_path"
     ;;
-  autocomplete_evaluate)
-    evaluate_AutoComplete "$destination_dir" "$run_at_server" "$overwrite"  "$code_dir"
+  Autocomplete_evaluate)
+    Autocomplete_evaluate "$destination_dir" "$run_at_server" "$overwrite" 
     ;;
   ET_run)
-    run_ET "$destination_dir" "$run_at_server" "$overwrite"
+    ET_run "$destination_dir" "$run_at_server" "$overwrite"
     ;;
   ET_evaluate)
-    evaluate_ET "$destination_dir" "$run_at_server" "$overwrite"
+    ET_evaluate "$destination_dir" "$run_at_server" "$overwrite"
     ;;
   MICE_standard_run)
-    run_MICE_standard "$destination_dir" "$run_at_server" "$overwrite"
-    ;;
-  MICE_hnorm_run)
-    run_MICE_hnorm "$destination_dir" "$run_at_server" "$overwrite"
+    MICE_standard_run "$destination_dir" "$run_at_server" "$overwrite" "$package_path"
     ;;
   MICE_context_run)
-    run_MICE_context "$destination_dir" "$run_at_server" "$overwrite"
+    MICE_context_run "$destination_dir" "$run_at_server" "$overwrite" "$package_path"
     ;;
   MICE_evaluate)
-    evaluate_MICE "$destination_dir" "$run_at_server" "$overwrite"
+    MICE_evaluate "$destination_dir" "$run_at_server" "$overwrite"
   ;;
   Average_run)
-    run_average "$destination_dir" "$run_at_server" "$overwrite"
+    Average_run "$destination_dir" "$run_at_server" "$overwrite"
     ;;
   Average_evaluate)
-    evaluate_average "$destination_dir" "$run_at_server" "$overwrite"
+    Average_evaluate "$destination_dir" "$run_at_server" "$overwrite"
   ;;
   *)
     usage
