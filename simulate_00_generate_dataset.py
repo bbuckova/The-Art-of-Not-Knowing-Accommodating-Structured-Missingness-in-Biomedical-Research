@@ -48,9 +48,9 @@ def generate_covariance_matrix(matrix_type, dim=10, rho=0.4):
         mean_df = np.zeros((1, dim))
 
     elif matrix_type == "real":        
-        matrix = pd.read_table("means.csv", sep=',',index_col=0)
+        matrix = pd.read_table("cov_matrix.csv", sep=',',index_col=0)
         matrix = matrix.iloc[0:dim+1, 0:dim+1]
-        mean_df = pd.read_table("cov_matrix.csv", sep=',', index_col=0)
+        mean_df = pd.read_table("means.csv", sep=',', index_col=0)
         mean_df = mean_df.iloc[0:dim+1]
         
     else:
@@ -161,7 +161,7 @@ def generate_dataset(matrix_type, dim=10, n_samples=50, dataset=0):
     """
     
     # Generate the covariance matrix and mean vector
-    cov_m, mean_df = generate_covariance_matrix(matrix_type, dim=dim, is_server=is_server)
+    cov_m, mean_df = generate_covariance_matrix(matrix_type, dim=dim)
     cov_m_np = cov_m.to_numpy()  # Convert to NumPy array
     mean_df = mean_df.to_numpy()  # Convert to NumPy array
 
