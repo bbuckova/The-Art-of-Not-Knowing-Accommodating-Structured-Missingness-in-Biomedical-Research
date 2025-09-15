@@ -116,3 +116,12 @@ Output folders:
 - `MICE_standard_results/`
 - `MICE_context_results/`
 
+---
+## License
+
+This project uses dual licensing:
+- **Code**: GPL-3.0 (see `LICENSE`)
+- **Data files** (`cov_matrix.csv`, `means.csv`): CC0-1.0 (see `LICENSE-CC0`)
+
+For complete licensing information, see `LICENSES.md`.
+
